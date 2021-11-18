@@ -1,0 +1,217 @@
+#!/bin/bash
+
+###### Funcion que muestra informacion al usuario ######
+
+function info() {
+        echo Script para instalar moodle
+        sleep 2
+        echo Este script solo puede ser ejecutado en Debian
+        sleep 1
+        echo Este script solo puede ser ejecutado por el super usuario
+        sleep 2
+
+}
+
+####### Modulo que valida que el usuario sea root #####
+
+function root() {
+
+USR=$(whoami)
+
+        if [[ $USR = "root" ]];then
+                echo "Usuario valido"
+        else
+                echo "Necesita ser usuario root para ejecutar este script"
+                exit
+        fi
+}
+
+##### Modulo que valida el sistema operativo ######
+
+function so() {
+
+SO=$(hostnamectl | grep "Operating" | awk -F " " '{print $3}')
+
+	if [[ $SO = "Debian" ]];then
+		echo " "
+	else
+		echo "Este script solo es para Debian"
+		exit
+	fi
+}
+
+########## Modulo que instala Apache en caso de no estar instalado ##########
+
+function apache() {
+
+DIRECTORIO=$(whereis apache2 | awk -F " " '{print $2}')
+
+	echo "Comprobando Apache..."
+	sleep 2
+        if [[ -d "/etc/apache2" && $DIRECTORIO = "/usr/sbin/apache2" ]];then
+                echo "Apache Instalado"
+		systemctl reload apache2
+		sleep 2
+        else
+                echo "Instalando apache"
+                apt install apache2 apache2-utils
+                echo "Se instalo apache"
+		sleep 2
+		#Ocultar firma e indices
+		sed -i 's/ServerSignature On/ServerSignature Off/' /etc/apache2/conf-available/security.conf
+		sed -i 's/ServerTokens OS/ServerTokens Prod/' /etc/apache2/conf-available/security.conf
+		systemctl reload apache2
+        fi
+}
+
+######### Modulo que instala php en caso de no estar instalado ##########
+
+function vphp(){
+
+	echo "Comprobando PHP..."
+	sleep 2
+        if [ -d "/etc/php" ];then
+                echo "PHP ya esta instalado en el servidor"
+		sleep 2
+        else
+                apt install -y php libapache2-mod-php php-cli php-fpm php-json php-pdo php-mysql php-zip php-gd 
+                echo "Se instalo php"
+		sleep 2
+      fi
+}
+
+####### Mudulo que instala mariadb en caso de no no estar instalado ######
+
+function mariadb(){
+MYSQL=$(whereis mysql | awk -F " " '{print $2}')
+
+	echo "Comprobando Mariadb..."
+	sleep 2
+        if [[ -d "/etc/mysql" && $MYSQL = "/usr/bin/mysql" ]];then
+                echo "Mysql ya se encuentra instalado en el servidor"
+		sleep 2
+        else
+                apt -y install mariadb-server
+
+		#Configurar mariadb 
+		echo " "
+		echo "Si es la primera vez que instala mariadb debe configurar opciones de seguridad"
+		sleep 2
+		echo "Lo puede configurar a su gusto o puede elegir las siguientes opciones"
+		echo "1. Enter"
+		echo "2. N"
+		echo "3. N"
+		echo "4. Y"
+		echo "5. Y"
+		echo "6. Y"
+		echo "7. Y"
+		mysql_secure_installation
+		sleep 2
+                echo "Listo, configuracion exitosa"
+		echo "Se instalo mariadb"
+		sleep 2
+        fi
+}
+
+##### Modulo que prepara moodle para instalar  ##########
+
+function moodle(){
+
+	echo "Iniciando instalacion"
+        if [ -f "/var/www/html/moodle/conf.php" ];then
+                echo "Moodle ya esta instalado compruebe su estado"
+        else
+
+		#Instalar git en caso de no tenerlo
+                apt -y install git
+
+		#Cambiar de ruta para descargar el repositorio de moodle
+                cd /var/www/html
+                git clone -b MOODLE_310_STABLE git://git.moodle.org/moodle.git
+                chown -R www-data /var/www/html/moodle
+
+		#Se crea un directorio de comunicacion
+                mkdir /var/www/moodledata
+                chown www-data /var/www/moodledata
+
+                ##### Dependencias necesarias de PHP #####
+                apt -y install php-curl php-gd php-intl php-mbstring php-soap php-xml php-xmlrpc php-zip php-mysql
+
+                ##### Modificar archivo php.ini #####
+                sed -i 's/;max_input_vars = 1000/max_input_vars = 5000/' /etc/php/7.4/apache2/php.ini
+
+                ##### Crear base de datos y usuario #####
+		PASSDB=$(< /dev/urandom tr -cd _A-Za-z0-9.,*$%=\&\!\?- | head -c16;echo)
+                echo "Para continuar con la instalacion es necesario una base de datos"
+                echo "Ingrese su contraseña de root"
+                read -s password
+                echo "Ingrese un nombre para la base de datos"
+                read name
+                echo "Ingrese el nombre de usuario de la base de datos"
+                read user
+                mysql -u root -p"$password" -e"CREATE DATABASE $name charset utf8mb4 collate utf8mb4_unicode_ci;"
+                mysql -u root -p"$password" -e"CREATE USER $user@localhost identified by '$PASSDB';"
+                mysql -u root -p"$password" -e"grant all privileges on $name.* to $user@localhost;"
+                echo "Base de datos creada con exito"
+		sleep 2
+                echo "Nombre: $name"
+                echo "Usuario: $user"
+                echo "Contraseña: $PASSDB"
+                echo "Por favor guarde esta informacion"
+		sleep 3
+
+		echo "La descarga de moodle se realizo con exito"
+		systemctl reload apache2
+		sleep 2
+
+		#Instalación de moodle en el servidor
+		echo "Para continuar debe instalar moodle en su servidor"
+		echo "¿Como desea instalar moodle"
+		sleep 2
+		echo "Seleccione el numero de la opcion"
+		echo "1. Navegador web"
+		echo "2. Terminal"
+		read opc
+
+		#Instalar moodle via web o CLI
+		IP=$(hostname -I | awk -F " " '{print $1}')
+		PASSM=$(date +%s | sha256sum| base64 | head -c16;echo)
+                URL="http://$IP/moodle"
+
+	        if [[ $opc -eq 1 ]];then
+        	echo "En tu navegador web introduce $IP/moodle y sigue las instrucciones"
+		sleep 2
+		echo " ***Gracias por usar el script de moodle***"
+	        elif [[ $opc -eq 2 ]];then
+
+                echo -n "Ingrese un correo electronico para moodle: "
+                read correo
+        	php /var/www/html/moodle/admin/cli/install.php --chmod=0777 --lang=es_mx --wwwroot=$URL --dataroot=/var/www/moodledata --dbtype=mariadb --dbhost=localhost --dbname=$name --dbuser=$user --dbpass=$PASSDB --dbport= --dbsocket= --prefix= --fullname=luismoodle --shortname=prueba --adminuser=admin --adminpass=$PASSM --adminemail=$correo --agree-license=s --non-interactive
+		chown -R www-data /var/www/html/moodle
+                chown -R www-data /var/www/moodledata
+		echo " "
+		echo "Para iniciar sesion ingresa a $URL"
+		echo "Usuario: admin"
+		echo "Contraseña: $PASSM"
+		echo "Por favor guarda los siguientes datos"
+
+		echo "***Gracias por usar el script de moodle***"
+	        else
+        	echo "No seas menso es 1 o 2"
+		sleep 3
+		exit
+
+	        fi
+
+        fi
+}
+
+info
+root
+so
+apt update
+apt -y upgrade
+apache
+vphp
+mariadb
+moodle
